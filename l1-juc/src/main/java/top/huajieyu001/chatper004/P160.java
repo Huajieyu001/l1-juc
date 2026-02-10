@@ -110,12 +110,15 @@ class Account5UnsafeUsedCas implements Account5{
 
     @Override
     public void withdraw(Integer amount) {
-        while (true){
-            int oldBalance = this.balance.get();
-            int newBalance = oldBalance - amount;
-            if(this.balance.compareAndSet(oldBalance, newBalance)){
-                break;
-            }
-        }
+//        while (true){
+//            int oldBalance = this.balance.get();
+//            int newBalance = oldBalance - amount;
+//            if(this.balance.compareAndSet(oldBalance, newBalance)){
+//                break;
+//            }
+//        }
+
+        // 简化写法
+        this.balance.getAndAdd(-amount);
     }
 }
