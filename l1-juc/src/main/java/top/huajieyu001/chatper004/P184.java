@@ -21,3 +21,11 @@ public class P184 {
         System.out.println(obj);
     }
 }
+
+class UnsafeUtils{
+    public static Unsafe getUnsafe() throws NoSuchFieldException, IllegalAccessException{
+        Field theUnsafe = Unsafe.class.getDeclaredField("theUnsafe");
+        theUnsafe.setAccessible(true);
+        return (Unsafe) theUnsafe.get(null);
+    }
+}
