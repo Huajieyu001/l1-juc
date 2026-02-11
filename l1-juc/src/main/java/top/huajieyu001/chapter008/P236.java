@@ -19,26 +19,30 @@ public class P236 {
         Thread t1 = new Thread(() -> {
             lock.lock();
             try {
-                System.out.println("第二次获取锁");
-                lock.unlock();
-                System.out.println(lock.isSelf());
+                System.out.println("locking");
                 lock.lock();
-                System.out.println(lock.isSelf());
             } finally {
+                System.out.println("unlocking");
                 lock.unlock();
-                System.out.println("解锁成功");
             }
         });
 
         Thread t2 = new Thread(() -> {
+            lock.lock();
+            try {
+                System.out.println("locking2");
+            } finally {
+                System.out.println("unlocking2");
+                lock.unlock();
+            }
         });
 
         t1.start();
-        try {
-            t1.join();
-        } catch (InterruptedException e) {
-            throw new RuntimeException(e);
-        }
+//        try {
+//            t1.join();
+//        } catch (InterruptedException e) {
+//            throw new RuntimeException(e);
+//        }
         t2.start();
     }
 }
@@ -80,53 +84,31 @@ class MyLock implements Lock {
 
     @Override
     public void lock() {
-        if(!sync.tryAcquire(1)){
-            throw new IllegalMonitorStateException();
-        }
+        sync.acquire(1);
     }
 
     @Override
     public void lockInterruptibly() throws InterruptedException {
-        do {
-            sync.tryAcquire(1);
-            Thread.sleep(10);
-        } while (!sync.isHeldExclusively());
+        sync.acquireInterruptibly(1);
     }
 
     @Override
     public boolean tryLock() {
-        if(!sync.tryAcquire(1)){
-            throw new IllegalMonitorStateException();
-        }
-        return sync.isHeldExclusively();
+        return sync.tryAcquire(1);
     }
 
     @Override
     public boolean tryLock(long time, TimeUnit unit) throws InterruptedException {
-        long startTime = System.nanoTime();
-        long nanos = unit.toNanos(time);
-        do {
-            if (sync.tryAcquire(1)) {
-                return true;
-            }
-            Thread.sleep(10);
-        } while (System.nanoTime() - startTime <= nanos);
-        return false;
+        return sync.tryAcquireNanos(1, unit.toNanos(time));
     }
 
     @Override
     public void unlock() {
-        if(!sync.tryRelease(1)){
-            throw new IllegalMonitorStateException();
-        }
+        sync.release(1);
     }
 
     @Override
     public Condition newCondition() {
         return sync.newCondition();
-    }
-
-    public boolean isSelf(){
-        return sync.isHeldExclusively();
     }
 }
