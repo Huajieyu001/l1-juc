@@ -4,6 +4,7 @@ import lombok.extern.slf4j.Slf4j;
 
 import java.util.ArrayDeque;
 import java.util.Deque;
+import java.util.HashSet;
 import java.util.UUID;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
@@ -19,7 +20,7 @@ import java.util.concurrent.locks.ReentrantLock;
 public class P200 {
 
     public static void main(String[] args) {
-        test3();
+        test5();
     }
 
     public static void test1() {
@@ -85,8 +86,44 @@ public class P200 {
     public static void test3() {
         BlockingQueue bq = new BlockingQueue<>(5);
 
+        System.out.println(bq.pollV2(1000, TimeUnit.MILLISECONDS));
+    }
+
+    /**
+     * 模拟测试线程池正常情况，任务超过核心线程但不超过任务队列和核心线程的总数
+     */
+    public static void test4() {
+        ThreadPool tp = new ThreadPool(2, 6, 1, TimeUnit.SECONDS, 10);
+
         try {
-            System.out.println(bq.pollV2(1000, TimeUnit.MILLISECONDS));
+            for (int i = 0; i < 10; i++) {
+                int finalI = i;
+                tp.execute(() -> {
+                    System.out.println(Thread.currentThread().getName() + "*****"  + finalI);
+                });
+            }
+        } catch (InterruptedException e) {
+            throw new RuntimeException(e);
+        }
+    }
+
+    /**
+     * 模拟测试线程池异常情况，任务超过任务队列和核心线程的总数
+     */
+    public static void test5() {
+        ThreadPool tp = new ThreadPool(2, 6, 1, TimeUnit.SECONDS, 10);
+        try {
+            for (int i = 0; i < 18; i++) {
+                int finalI = i;
+                tp.execute(() -> {
+                    try {
+                        Thread.sleep(5000);
+                    } catch (InterruptedException e) {
+                        throw new RuntimeException(e);
+                    }
+                    System.out.println(Thread.currentThread().getName() + "*****"  + finalI);
+                });
+            }
         } catch (InterruptedException e) {
             throw new RuntimeException(e);
         }
@@ -125,11 +162,15 @@ class BlockingQueue<T> {
         }
     }
 
-    public T take() throws InterruptedException {
+    public T take() {
         lock.lock();
         try {
             while(tasks.isEmpty()) {
-                notEmpty.await();
+                try {
+                    notEmpty.await();
+                } catch (InterruptedException e) {
+                    throw new RuntimeException(e);
+                }
             }
             T task = tasks.removeFirst();
             notFull.signalAll();
@@ -173,15 +214,19 @@ class BlockingQueue<T> {
      * @return
      * @throws InterruptedException
      */
-    public T pollV2(long timeout, TimeUnit unit) throws InterruptedException {
+    public T pollV2(long timeout, TimeUnit unit) {
         lock.lock();
         try {
             long nanos = unit.toNanos(timeout);
             log.debug("pollV2 start");
             while(tasks.isEmpty()) {
-                if((nanos = notEmpty.awaitNanos(nanos)) <= 0){
-                    log.debug("pollV2 timeout");
-                    return null;
+                try {
+                    if((nanos = notEmpty.awaitNanos(nanos)) <= 0){
+                        log.debug("pollV2 timeout");
+                        return null;
+                    }
+                } catch (InterruptedException e) {
+                    throw new RuntimeException(e);
                 }
             }
             T task = tasks.removeFirst();
@@ -198,6 +243,89 @@ class BlockingQueue<T> {
             return tasks.size();
         } finally {
             lock.unlock();
+        }
+    }
+}
+
+
+@Slf4j(topic = "c.tp")
+class ThreadPool {
+
+    private HashSet<Worker> workers = new HashSet<>();
+
+    private int coolSize;
+
+    private int maxSize;
+
+    private long timeout;
+
+    private TimeUnit unit;
+
+    private BlockingQueue<Runnable> taskQueue;
+
+    private boolean allowReleaseCoreThread;
+
+    private int rejectedState;
+
+    ThreadPool(int coolSize, int maxSize, long timeout, TimeUnit unit, int queueSize) {
+        this.coolSize = coolSize;
+        this.maxSize = maxSize;
+        this.timeout = timeout;
+        this.unit = unit;
+        taskQueue = new BlockingQueue<>(queueSize);
+    }
+
+    ThreadPool(int coolSize, int maxSize, long timeout, TimeUnit unit, int queueSize, int rejectedState) {
+        this(coolSize, maxSize, timeout, unit, queueSize);
+        this.rejectedState = rejectedState;
+    }
+
+    public void execute(Runnable task) throws InterruptedException {
+        synchronized (workers) {
+            log.debug("execute start");
+            if(workers.size() < coolSize){
+                log.debug("create worker, worker is [{}], task is [{}]", workers, task);
+                Worker worker = new Worker(task);
+                workers.add(worker);
+                worker.start();
+            } else {
+                log.debug("worker already full, submit task to task queue, task is [{}]", task);
+                taskQueue.submit(task);
+            }
+        }
+    }
+
+    public void allowReleaseCoreThread() {
+        allowReleaseCoreThread = true;
+    }
+
+    private class Worker extends Thread {
+
+        private Runnable task;
+
+        Worker(Runnable task) {
+            this.task = task;
+        }
+
+        @Override
+        public void run() {
+            // 方式1：死等，会让整个主线程一直等待着
+            // while(task != null || (task = taskQueue.take()) != null) {
+            // 方式2：超时的话就结束，主线程也能够被释放
+            while(task != null || (task = taskQueue.pollV2(timeout, unit)) != null) {
+                log.debug("execute worker, task is [{}]", task);
+                try {
+                    task.run();
+                } catch (RejectedExecutionException e) {
+                    e.printStackTrace();
+                } finally {
+                    task = null;
+                }
+            }
+            synchronized (workers) {
+                log.debug("worker [{}] is free", this);
+                workers.remove(this);
+            }
         }
     }
 }
