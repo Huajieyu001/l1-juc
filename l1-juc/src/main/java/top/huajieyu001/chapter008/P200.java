@@ -111,9 +111,10 @@ public class P200 {
      * 模拟测试线程池异常情况，任务超过任务队列和核心线程的总数
      */
     public static void test5() {
-        ThreadPool tp = new ThreadPool(2, 6, 1, TimeUnit.SECONDS, 10);
+        ThreadPool tp = new ThreadPool(2, 6, 1, TimeUnit.SECONDS, 10, ((queue, task) ->
+                task.run()));
         try {
-            for (int i = 0; i < 18; i++) {
+            for (int i = 0; i < 20; i++) {
                 int finalI = i;
                 tp.execute(() -> {
                     try {
@@ -130,7 +131,7 @@ public class P200 {
     }
 }
 
-@Slf4j(topic = "c.bq")
+@Slf4j()
 class BlockingQueue<T> {
 
     private Deque<T> tasks = new ArrayDeque<>();
@@ -160,6 +161,41 @@ class BlockingQueue<T> {
         } finally {
             lock.unlock();
         }
+    }
+
+    public void trySubmit(RejectPolicy rejectPolicy, T task) {
+        lock.lock();
+        try {
+            if(tasks.size() == maxSize){
+                rejectPolicy.reject(this, task);
+            } else {
+                this.submit(task);
+                notEmpty.signalAll();
+            }
+        } finally {
+            lock.unlock();
+        }
+    }
+
+    public boolean offer(T t, long timeout, TimeUnit unit){
+        lock.lock();
+        try {
+            long nanos = unit.toNanos(timeout);
+            while(tasks.size() == maxSize && nanos > 0){
+                nanos = notFull.awaitNanos(nanos);
+            }
+            if(nanos < 0){
+                return false;
+            }
+            tasks.addFirst(t);
+            notEmpty.signalAll();
+            return true;
+        } catch (InterruptedException e) {
+            e.printStackTrace();
+        } finally {
+            lock.unlock();
+        }
+        return false;
     }
 
     public T take() {
@@ -245,6 +281,8 @@ class BlockingQueue<T> {
             lock.unlock();
         }
     }
+
+
 }
 
 
@@ -265,24 +303,23 @@ class ThreadPool {
 
     private boolean allowReleaseCoreThread;
 
-    private int rejectedState;
+    private RejectPolicy<Runnable> rejectPolicy;
 
     ThreadPool(int coolSize, int maxSize, long timeout, TimeUnit unit, int queueSize) {
+        this(coolSize, maxSize, timeout, unit, queueSize, new AbortPolicy<>());
+    }
+
+    ThreadPool(int coolSize, int maxSize, long timeout, TimeUnit unit, int queueSize, RejectPolicy<Runnable> rejectPolicy) {
         this.coolSize = coolSize;
         this.maxSize = maxSize;
         this.timeout = timeout;
         this.unit = unit;
         taskQueue = new BlockingQueue<>(queueSize);
-    }
-
-    ThreadPool(int coolSize, int maxSize, long timeout, TimeUnit unit, int queueSize, int rejectedState) {
-        this(coolSize, maxSize, timeout, unit, queueSize);
-        this.rejectedState = rejectedState;
+        this.rejectPolicy = rejectPolicy;
     }
 
     public void execute(Runnable task) throws InterruptedException {
         synchronized (workers) {
-            log.debug("execute start");
             if(workers.size() < coolSize){
                 log.debug("create worker, worker is [{}], task is [{}]", workers, task);
                 Worker worker = new Worker(task);
@@ -290,7 +327,9 @@ class ThreadPool {
                 worker.start();
             } else {
                 log.debug("worker already full, submit task to task queue, task is [{}]", task);
-                taskQueue.submit(task);
+                // taskQueue.submit(task);
+                // 把上面的直接提交任务改为通过拒绝策略灵=灵活提交任务
+                taskQueue.trySubmit(rejectPolicy, task);
             }
         }
     }
@@ -313,7 +352,7 @@ class ThreadPool {
             // while(task != null || (task = taskQueue.take()) != null) {
             // 方式2：超时的话就结束，主线程也能够被释放
             while(task != null || (task = taskQueue.pollV2(timeout, unit)) != null) {
-                log.debug("execute worker, task is [{}]", task);
+                log.debug("Running, task is [{}]", task);
                 try {
                     task.run();
                 } catch (RejectedExecutionException e) {
@@ -329,3 +368,59 @@ class ThreadPool {
         }
     }
 }
+
+@FunctionalInterface
+interface RejectPolicy<T> {
+    void reject(BlockingQueue<T> queue, T task);
+}
+
+/**
+ * 直接抛弃策略
+ * @param <T>
+ */
+class AbortPolicy<T> implements RejectPolicy<T> {
+    @Override
+    public void reject(BlockingQueue<T> queue, T task) {
+        System.out.println("AbortPolicy reject task : [" + task + "]");
+    }
+}
+
+class ThrowingExceptionPolicy<T> implements RejectPolicy<T> {
+    @Override
+    public void reject(BlockingQueue<T> queue, T task) {
+        throw new RuntimeException("task is aborted");
+    }
+}
+
+/**
+ * 死等策略
+ * @param <T>
+ */
+class WaitingPolicy<T> implements RejectPolicy<T> {
+    @Override
+    public void reject(BlockingQueue<T> queue, T task) {
+        queue.submit(task);
+    }
+}
+
+/**
+ * 超时等待策略
+ * @param <T>
+ */
+class WaitTimeoutPolicy<T> implements RejectPolicy<T> {
+    @Override
+    public void reject(BlockingQueue<T> queue, T task) {
+        queue.pollV2(1000, TimeUnit.MILLISECONDS);
+    }
+}
+
+class CallerRunPolicy<T> implements RejectPolicy<T> {
+    @Override
+    public void reject(BlockingQueue<T> queue, T task) {
+        if(task instanceof Runnable) {
+            Runnable r = (Runnable)task;
+            r.run();
+        }
+    }
+}
+
