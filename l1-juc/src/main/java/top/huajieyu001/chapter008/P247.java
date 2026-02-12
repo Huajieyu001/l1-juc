@@ -13,6 +13,10 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
 public class P247 {
 
     public static void main(String[] args) {
+        test2();
+    }
+
+    public static void test0(){
         DataContainer dc = new DataContainer();
 
         dc.write("Ssdauigfdjg");
@@ -28,6 +32,40 @@ public class P247 {
                 dc.write("sdjgfsiafnisdhfisdfsfd");
             }).start();
         }
+    }
+
+    /**
+     * 测试锁升级（读锁->写锁）
+     */
+    public static void test1(){
+        ReentrantReadWriteLock rwl = new ReentrantReadWriteLock();
+
+        System.out.println(1);
+        rwl.readLock().lock();
+        System.out.println(2);
+        rwl.writeLock().lock(); // 这里会被一直卡着
+        System.out.println(3);
+        rwl.readLock().unlock();
+        System.out.println(4);
+        rwl.writeLock().unlock();
+        System.out.println(5);
+    }
+
+    /**
+     * 测试锁降级（写锁->读锁）可以全部执行
+     */
+    public static void test2(){
+        ReentrantReadWriteLock rwl = new ReentrantReadWriteLock();
+
+        System.out.println(1);
+        rwl.writeLock().lock();
+        System.out.println(2);
+        rwl.readLock().lock();
+        System.out.println(3);
+        rwl.readLock().unlock();
+        System.out.println(4);
+        rwl.writeLock().unlock();
+        System.out.println(5);
     }
 }
 
